@@ -10,8 +10,10 @@ on:
       - 'settings.gradle.kts'   # 监听项目设置
       - 'gradle.properties'     # 监听 Gradle 属性
       - 'gradle/**'             # 监听 Gradle Wrapper 和依赖定义
-      - '.github/workflows/auto-preview-release.yml' # 监听工作流文件的修改
   workflow_dispatch:
+    inputs:
+      commit:
+        required: true
 
 jobs:
   build_and_prerelease:
@@ -23,6 +25,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v5
         with:
+          ref: ${{ inputs.commit }}
           fetch-depth: 0
 
       - name: Get commit short SHA
