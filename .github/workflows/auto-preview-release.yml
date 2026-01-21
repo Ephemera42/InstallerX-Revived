@@ -11,6 +11,7 @@ on:
       - 'gradle.properties'     # 监听 Gradle 属性
       - 'gradle/**'             # 监听 Gradle Wrapper 和依赖定义
       - '.github/workflows/auto-preview-release.yml' # 监听工作流文件的修改
+  workflow_dispatch:
 
 jobs:
   build_and_prerelease:
@@ -71,7 +72,7 @@ jobs:
         env:
           GITHUB_ACTOR: ${{ github.actor }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: ./gradlew assembleOnlinePreviewRelease assembleOfflinePreviewRelease -PVERSION_NAME="${{ env.NEW_VERSION }}"
+        run: ./gradlew assembleOnlinePreviewRelease assembleOfflinePreviewRelease -PVERSION_NAME="${{ env.NEW_VERSION }}" -PAPP_ID=com.android.packageinstaller
 
       - name: Find and Rename Preview APKs
         id: rename_apks
