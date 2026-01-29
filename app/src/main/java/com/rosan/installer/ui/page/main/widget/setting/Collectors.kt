@@ -24,7 +24,7 @@ fun LogEventCollector(viewModel: PreferredViewModel) {
                     context.startActivity(chooser)
                 }
 
-                is PreferredViewEvent.ShareLogFailed -> context.toast("Failed to share log")
+                is PreferredViewEvent.ShareLogFailed -> context.toast(event.error)
                 else -> null
             }
         }

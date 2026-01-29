@@ -567,15 +567,20 @@ class PreferredViewModel(
                 return@launch
             }
 
+            // Check if the log file is empty before sharing
+            if (latestLogFile.length() == 0L) {
+                _uiEvents.emit(PreferredViewEvent.ShareLogFailed("Log file is empty"))
+                return@launch
+            }
+
             val authority = "${BuildConfig.APPLICATION_ID}.fileprovider"
             val uri = FileProvider.getUriForFile(context, authority, latestLogFile)
 
-            // Emit specific event instead of starting activity here
             _uiEvents.emit(PreferredViewEvent.OpenLogShare(uri))
 
         } catch (e: Exception) {
-            Timber.e(e, "Share log failed")
-            _uiEvents.emit(PreferredViewEvent.ShareLogFailed(e.message ?: "Unknown error"))
+            Timber.e(e, "Failed to share log")
+            _uiEvents.emit(PreferredViewEvent.ShareLogFailed(e.message ?: "Failed to share log"))
         }
     }
 
