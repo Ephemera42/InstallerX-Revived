@@ -13,11 +13,13 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
+import androidx.core.content.FileProvider
 import androidx.core.net.toUri
 import androidx.datastore.preferences.core.Preferences
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.kieronquinn.monetcompat.core.MonetCompat
+import com.rosan.installer.BuildConfig
 import com.rosan.installer.R
 import com.rosan.installer.data.app.model.enums.HttpProfile
 import com.rosan.installer.data.app.model.enums.RootImplementation
@@ -37,6 +39,10 @@ import com.rosan.installer.ui.theme.m3color.PresetColors
 import com.rosan.installer.ui.theme.m3color.RawColor
 import com.rosan.installer.ui.theme.m3color.ThemeMode
 import com.rosan.installer.ui.util.doBiometricAuth
+import com.rosan.installer.util.addFlag
+import com.rosan.installer.util.removeFlag
+import com.rosan.installer.util.timber.FileLoggingTree.Companion.LOG_DIR_NAME
+import com.rosan.installer.util.timber.FileLoggingTree.Companion.LOG_SUFFIX
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.Flow
@@ -54,6 +60,7 @@ import kotlinx.coroutines.withContext
 import org.koin.core.component.KoinComponent
 import org.koin.core.component.inject
 import timber.log.Timber
+import java.io.File
 
 class PreferredViewModel(
     private val appDataStore: AppDataStore,
@@ -175,6 +182,10 @@ class PreferredViewModel(
             is PreferredViewAction.SetSeedColor -> setSeedColor(action.color)
             is PreferredViewAction.SetDynColorFollowPkgIcon -> setDynColorFollowPkgIcon(action.follow)
             is PreferredViewAction.SetDynColorFollowPkgIconForLiveActivity -> setDynColorFollowPkgIconForLiveActivity(action.follow)
+            is PreferredViewAction.SetUseBlur -> setUseBlur(action.enable)
+
+            is PreferredViewAction.SetEnableFileLogging -> setEnableFileLogging(action.enable)
+            is PreferredViewAction.ShareLog -> shareLog()
         }
 
     private fun init() {
@@ -392,25 +403,25 @@ class PreferredViewModel(
 
             if (enable) {
                 // 1. Add the flag being enabled
-                newFlags = newFlags or flag
+                newFlags = newFlags.addFlag(flag)
 
                 // 2. Handle mutual exclusivity
                 if (flag == PackageManagerUtil.DELETE_ALL_USERS) {
                     if (currentFlags and PackageManagerUtil.DELETE_SYSTEM_APP != 0) {
                         // Notify user about forced change
                         notifyMutualExclusion(flag)
-                        newFlags = newFlags and PackageManagerUtil.DELETE_SYSTEM_APP.inv()
+                        newFlags = newFlags.removeFlag(PackageManagerUtil.DELETE_SYSTEM_APP)
                     }
                 } else if (flag == PackageManagerUtil.DELETE_SYSTEM_APP) {
                     if (currentFlags and PackageManagerUtil.DELETE_ALL_USERS != 0) {
                         // Notify user about forced change
                         notifyMutualExclusion(flag)
-                        newFlags = newFlags and PackageManagerUtil.DELETE_ALL_USERS.inv()
+                        newFlags = newFlags.removeFlag(PackageManagerUtil.DELETE_ALL_USERS)
                     }
                 }
             } else {
                 // Disable: just remove the flag
-                newFlags = newFlags and flag.inv()
+                newFlags = newFlags.removeFlag(flag)
             }
 
             newFlags
@@ -535,6 +546,45 @@ class PreferredViewModel(
             appDataStore.putBoolean(AppDataStore.LAB_SET_INSTALL_REQUESTER, enable)
         }
 
+    private fun setEnableFileLogging(enable: Boolean) =
+        viewModelScope.launch {
+            appDataStore.putBoolean(AppDataStore.ENABLE_FILE_LOGGING, enable)
+        }
+
+    private fun shareLog() = viewModelScope.launch(Dispatchers.IO) {
+        try {
+            val logDir = File(context.cacheDir, LOG_DIR_NAME)
+            if (!logDir.exists() || !logDir.isDirectory) {
+                _uiEvents.emit(PreferredViewEvent.ShareLogFailed("Log directory missing"))
+                return@launch
+            }
+
+            val latestLogFile = logDir.listFiles()
+                ?.filter { it.isFile && it.name.endsWith(LOG_SUFFIX) }
+                ?.maxByOrNull { it.lastModified() }
+
+            if (latestLogFile == null) {
+                _uiEvents.emit(PreferredViewEvent.ShareLogFailed("No logs found"))
+                return@launch
+            }
+
+            // Check if the log file is empty before sharing
+            if (latestLogFile.length() == 0L) {
+                _uiEvents.emit(PreferredViewEvent.ShareLogFailed("Log file is empty"))
+                return@launch
+            }
+
+            val authority = "${BuildConfig.APPLICATION_ID}.fileprovider"
+            val uri = FileProvider.getUriForFile(context, authority, latestLogFile)
+
+            _uiEvents.emit(PreferredViewEvent.OpenLogShare(uri))
+
+        } catch (e: Exception) {
+            Timber.e(e, "Failed to share log")
+            _uiEvents.emit(PreferredViewEvent.ShareLogFailed(e.message ?: "Failed to share log"))
+        }
+    }
+
     private fun setThemeMode(mode: ThemeMode) = viewModelScope.launch {
         appDataStore.putString(AppDataStore.THEME_MODE, mode.name)
     }
@@ -563,6 +613,11 @@ class PreferredViewModel(
     private fun setDynColorFollowPkgIconForLiveActivity(enable: Boolean) =
         viewModelScope.launch {
             appDataStore.putBoolean(AppDataStore.LIVE_ACTIVITY_DYN_COLOR_FOLLOW_PKG_ICON, enable)
+        }
+
+    private fun setUseBlur(enable: Boolean) =
+        viewModelScope.launch {
+            appDataStore.putBoolean(AppDataStore.UI_USE_BLUR, enable)
         }
 
     private suspend fun runPrivilegedAction(
@@ -673,6 +728,8 @@ class PreferredViewModel(
                 appDataStore.getBoolean(AppDataStore.LAB_MODULE_FLASH_SHOW_ART, true)
             val labRootModuleAlwaysUseRootFlow =
                 appDataStore.getBoolean(AppDataStore.LAB_MODULE_ALWAYS_ROOT, false)
+            val enableFileLoggingFlow =
+                appDataStore.getBoolean(AppDataStore.ENABLE_FILE_LOGGING, true)
             val labRootImplementationFlow =
                 appDataStore.getString(AppDataStore.LAB_ROOT_IMPLEMENTATION)
                     .map { RootImplementation.fromString(it) }
@@ -701,6 +758,8 @@ class PreferredViewModel(
                 appDataStore.getBoolean(AppDataStore.UI_DYN_COLOR_FOLLOW_PKG_ICON, false)
             val useDynColorFollowPkgIconForLiveActivityFlow =
                 appDataStore.getBoolean(AppDataStore.LIVE_ACTIVITY_DYN_COLOR_FOLLOW_PKG_ICON, false)
+            val useBlurFlow =
+                appDataStore.getBoolean(AppDataStore.UI_USE_BLUR, true)
 
             combine(
                 authorizerFlow,
@@ -738,6 +797,7 @@ class PreferredViewModel(
                 labHttpProfileFlow,
                 labHttpSaveFileFlow,
                 labSetInstallRequesterFlow,
+                enableFileLoggingFlow,
                 themeModeFlow,
                 paletteStyleFlow,
                 useDynamicColorFlow,
@@ -746,6 +806,7 @@ class PreferredViewModel(
                 wallpaperColorsFlow,
                 useDynColorFollowPkgIconFlow,
                 useDynColorFollowPkgIconForLiveActivityFlow,
+                useBlurFlow,
                 updateResultFlow
             ) { values: Array<Any?> ->
                 var idx = 0
@@ -788,6 +849,7 @@ class PreferredViewModel(
                 val labHttpProfile = values[idx++] as HttpProfile
                 val labHttpSaveFile = values[idx++] as Boolean
                 val labSetInstallRequester = values[idx++] as Boolean
+                val enableFileLogging = values[idx++] as Boolean
                 val themeMode = values[idx++] as ThemeMode
                 val paletteStyle = values[idx++] as PaletteStyle
                 val useDynamicColor = values[idx++] as Boolean
@@ -796,6 +858,7 @@ class PreferredViewModel(
                 @Suppress("UNCHECKED_CAST") val wallpaperColors = values[idx++] as? List<Int>
                 val useDynColorFollowPkgIcon = values[idx++] as Boolean
                 val useDynColorFollowPkgIconForLiveActivity = values[idx++] as Boolean
+                val useBlur = values[idx++] as Boolean
                 val updateResult = values[idx] as UpdateChecker.CheckResult?
 
                 val effectiveSeedColor = if (useDynamicColor && Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
@@ -866,9 +929,11 @@ class PreferredViewModel(
                     availableColors = availableColors,
                     useDynColorFollowPkgIcon = useDynColorFollowPkgIcon,
                     useDynColorFollowPkgIconForLiveActivity = useDynColorFollowPkgIconForLiveActivity,
+                    useBlur = useBlur,
                     hasUpdate = hasUpdate,
                     remoteVersion = remoteVersion,
-                    uninstallFlags = uninstallFlags
+                    uninstallFlags = uninstallFlags,
+                    enableFileLogging = enableFileLogging
                 )
             }.collectLatest { state = it }
         }
